@@ -12,6 +12,7 @@ import "rxjs/add/operator/takeUntil";
 //import {ajax} from 'rxjs/observable/dom/ajax';
 import {Observable} from 'rxjs/Observable';
 import 'rxjs/add/observable/of';
+import 'rxjs/add/observable/from';
 import request from "superagent";
 import Rx from "rxjs/Rx";
 
@@ -27,6 +28,102 @@ const FAILURE = 'FAILURE';
 const CANCEL = 'CANCEL';
 
 const CHANGE = 'CHANGE';
+
+// AUTH
+const AUTH_START = 'AUTH_START';
+const AUTH_SUCCESS = 'AUTH_SUCCESS';
+const AUTH_FAILURE = 'AUTH_FAILURE';
+
+
+const authStart = (data) => ({type: AUTH_START, data});
+
+const obtainAuthToken = (data) => {
+    console.log(data, 'obtainAuthToken');
+    return Observable.fromPromise(request.post('http://localhost:8000/api/v1/obtain_auth_token/', data));
+};
+
+const getUserInfo = (token) => {
+    console.log(token, 'getUserInfo')
+    return Observable.fromPromise(request
+        .get('http://localhost:8000/api/v1/get_user_info/')
+        .set('Authorization', `Token ${token}`)
+    );
+}
+
+const getUserInfoSuccess = (response) => {
+    console.log(response, 'getUserInfoSuccess');
+    return Observable.of(response);
+}
+
+
+const getUserInfoFailure = (response) => {
+    console.log(response, 'getUserInfoFailure');
+    return Observable.of(response)
+}
+
+const authEpic = action$ =>
+    action$.ofType(AUTH_START)
+        .mergeMap(action =>
+            obtainAuthToken(action.data)
+                .delay(300)
+                .flatMap(response => getUserInfo(response.body.token))
+                .delay(300)
+                .flatMap(response => getUserInfoSuccess(response))
+                .delay(300)
+                .catch(error => getUserInfoFailure(error))
+        )
+        //.takeUntil(action$.ofType(AUTH_FAILURE))
+        //.flatMap(result => {
+        //    if (result.statusCode == 200) return Observable.of({type: AUTH_SUCCESS})
+        //    else return Observable.of({type: AUTH_FAILURE})
+        //});
+        .map(result => {
+            if (result.statusCode == 200) return {type: AUTH_SUCCESS}
+            else return {type: AUTH_FAILURE}
+        });
+//.mapTo({type: AUTH_SUCCESS})
+
+//.map(action => obtainAuthToken(action.data))
+//.map(response => console.log(response))
+
+
+class Auth extends Component {
+    constructor(props) {
+        super(props);
+
+        this.state = {
+            username: '',
+            password: ''
+        }
+
+    }
+
+    handleUsernameChange(e) {
+        this.setState({username: e.target.value});
+    }
+
+    handlePasswordChange(e) {
+        this.setState({password: e.target.value});
+    }
+
+    handleFormSubmit(e) {
+        e.preventDefault();
+        this.props.authStart({
+            username: this.state.username,
+            password: this.state.password
+        })
+    }
+
+    render() {
+        return (
+            <form onSubmit={this.handleFormSubmit.bind(this)}>
+                <input type="text" value={this.state.username} onChange={this.handleUsernameChange.bind(this)}/>
+                <input type="password" value={this.state.password} onChange={this.handlePasswordChange.bind(this)}/>
+                <input type="submit"/>
+            </form>
+        )
+    }
+}
 
 
 const ping = () => ({type: PING});
@@ -65,13 +162,11 @@ const fetchApi = url => {
 
 const testEpic = action$ =>
     action$.ofType(START)
+        .delay(1000)
         .mergeMap(action =>
             Rx.Observable.fromPromise(
                 fetchApi(`/api/users/${action.payload}`)
-            )
-                .map(response => success(response))
-                .takeUntil(action$.ofType(CANCEL))
-                .catch(error => Observable.of({type: 'FAILURE', error}))
+            ).map(response => success(response))
         );
 
 
@@ -108,14 +203,33 @@ const testReducer = (state = {isFetching: false}, action) => {
     }
 };
 
+
+const authReducer = (state = {isLogging: false}, action) => {
+    switch (action.type) {
+        case AUTH_START:
+            return {isLogging: true};
+
+        case AUTH_SUCCESS:
+            return {isLogging: false};
+
+        case AUTH_FAILURE:
+            return {isLogging: false};
+
+        default:
+            return state;
+    }
+};
+
 const rootEpic = combineEpics(
     pingEpic,
-    testEpic
+    testEpic,
+    authEpic
 );
 
 const rootReducer = combineReducers({
     ping: pingReducer,
-    test: testReducer
+    test: testReducer,
+    auth: authReducer
 });
 
 
@@ -135,12 +249,13 @@ function mapDispatchToProps(dispatch) {
         success: bindActionCreators(success, dispatch),
         failure: bindActionCreators(failure, dispatch),
         cancel: bindActionCreators(cancel, dispatch),
-        change: bindActionCreators(change, dispatch)
+        change: bindActionCreators(change, dispatch),
+        authStart: bindActionCreators(authStart, dispatch)
     }
 }
 
 @connect(mapStateToProps, mapDispatchToProps)
-class App extends Component{
+class App extends Component {
 
     onTextChange(e) {
         this.props.change(e.target.value);
@@ -155,6 +270,7 @@ class App extends Component{
                 <button onClick={this.props.start}>Start Fetch</button>
                 <button onClick={this.props.cancel}>Cancel Fetch</button>
                 <input onChange={this.onTextChange.bind(this)} type="text"/>
+                <Auth authStart={this.props.authStart}/>
             </div>
 
         )
@@ -162,12 +278,11 @@ class App extends Component{
 }
 
 
-
 // redux/configureStore.js
 
 
 const logger = store => next => action => {
-    console.log(action)
+    console.log(action, 'logger')
     next(action)
 }
 
